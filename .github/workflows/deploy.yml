@@ -1,0 +1,92 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: terraform-practise
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test application
+        run: python -m py_compile app.py
+
+      - name: Build Docker image
+        run: docker build -t terraform-practise:${{ github.sha }} .
+
+      - name: Trivy security scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: terraform-practise:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test-and-build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ vars.ECR_REPOSITORY_URL }}:${{ github.sha }} .
+
+      - name: Push Docker image to ECR
+        run: |
+          docker push \
+            ${{ vars.ECR_REPOSITORY_URL }}:${{ github.sha }}
+
+      - name: Deploy to EC2 through SSM
+        run: |
+          aws ssm send-command \
+            --instance-ids "${{ vars.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin 228210524459.dkr.ecr.ap-south-1.amazonaws.com",
+              "docker pull 228210524459.dkr.ecr.ap-south-1.amazonaws.com/terraform-practise:${{ github.sha }}",
+              "docker stop terraform-practise || true",
+              "docker rm terraform-practise || true",
+              "docker run -d --name terraform-practise -p 5000:5000 228210524459.dkr.ecr.ap-south-1.amazonaws.com/terraform-practise:${{ github.sha }}"
+            ]' \
+            --region ap-south-1
