@@ -38,7 +38,7 @@ locals {
   github_owner    = "SutejNaik"
   github_owner_id = "181818616"
   github_repo     = "terraform-practise"
-  github_repo_id  = "1379788679"
+  github_repo_id  = "1381486313"
   github_branch   = "main"
 }
 
